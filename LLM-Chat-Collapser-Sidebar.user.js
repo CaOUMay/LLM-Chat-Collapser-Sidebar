@@ -15,6 +15,10 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @run-at       document-end
+// @homepageURL  https://github.com/CaOUMay/LLM-Chat-Collapser-Sidebar
+// @supportURL   https://github.com/CaOUMay/LLM-Chat-Collapser-Sidebar/issues
+// @updateURL    https://raw.githubusercontent.com/CaOUMay/LLM-Chat-Collapser-Sidebar/main/LLM-Chat-Collapser-Sidebar.user.js
+// @downloadURL  https://raw.githubusercontent.com/CaOUMay/LLM-Chat-Collapser-Sidebar/main/LLM-Chat-Collapser-Sidebar.user.js
 // ==/UserScript==
 
 (function () {
