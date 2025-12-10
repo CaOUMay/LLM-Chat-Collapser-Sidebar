@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         LLM Chat Folder + Question Sidebar
+// @name         LLM-Chat-Collapser-Sidebar
 // @name:zh-CN   LLM 聊天折叠器 + 问题侧栏
 // @namespace    https://github.com/CaO_U_May/llm-chat-collapser
 // @version      0.9
