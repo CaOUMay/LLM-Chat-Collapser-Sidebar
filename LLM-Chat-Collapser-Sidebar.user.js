@@ -2,12 +2,12 @@
 // @name         LLM-Chat-Collapser-Sidebar
 // @name:zh-CN   LLM 聊天折叠器 + 问题侧栏
 // @namespace    https://github.com/CaO_U_May/llm-chat-collapser
-// @version      0.9
+// @version      0.91
 // @description  Make Gemini/ChatGPT code blocks and long user messages collapsible, and provide question boxes for clicking to jump to relevant sections.
-// @description:zh-CN  让 Gemini / ChatGPT 的代码块和长用户消息可折叠，提供问题框以供点击跳转
+// @description:zh-CN  让 Gemini / ChatGPT 的代码块和长用户消息可折叠，提供问题框以供点击跳转，并在流式输出结束后自动折叠长代码。
 // @author       miniyu157 (original) , CaO_U_May (fork & modifications)
 // @license      MIT
-// @homepageURL  https://github.com/CaO_U_May/llm-chat-collapser
+// @homepageURL  https://github.com/CaOUMay/LLM-Chat-Collapser-Sidebar
 // @match        https://gemini.google.com/*
 // @match        https://chatgpt.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=openai.com
@@ -15,10 +15,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @run-at       document-end
-// @homepageURL  https://github.com/CaOUMay/LLM-Chat-Collapser-Sidebar
-// @supportURL   https://github.com/CaOUMay/LLM-Chat-Collapser-Sidebar/issues
-// @updateURL    https://raw.githubusercontent.com/CaOUMay/LLM-Chat-Collapser-Sidebar/main/LLM-Chat-Collapser-Sidebar.user.js
-// @downloadURL  https://raw.githubusercontent.com/CaOUMay/LLM-Chat-Collapser-Sidebar/main/LLM-Chat-Collapser-Sidebar.user.js
+// @downloadURL  https://update.greasyfork.org/scripts/557767/LLM-Chat-Collapser-Sidebar.user.js
+// @updateURL    https://update.greasyfork.org/scripts/557767/LLM-Chat-Collapser-Sidebar.meta.js
 // ==/UserScript==
 
 (function () {
@@ -39,6 +37,9 @@
 
     // 针对 ChatGPT <pre> 的延时处理 map（防抖）
     const pendingPreTimers = new WeakMap();
+
+    // 记录每个 <pre> 的流式检查状态（限频 + 只提前折叠一次）
+    const preStreamState = new WeakMap();
 
     // 重建问题列表的防抖定时器
     let rebuildTimer = null;
@@ -341,7 +342,7 @@
         display: none;
     }
 
-    /* 左下角缩放把手：向左下拖 => 左边界向左，右边保持不动 */
+    /* 左下角缩放把手：向左下拖 => 左边界向左，右边界不变 */
     #ucc-question-resize-handle-left {
         position: absolute;
         left: 6px;
@@ -357,7 +358,7 @@
         opacity: 1;
     }
 
-    /* 右下角缩放把手：向右下拖 => 右边界向右，左边保持不动 */
+    /* 右下角缩放把手：向右下拖 => 右边界向右，左边界不变 */
     #ucc-question-resize-handle-right {
         position: absolute;
         right: 6px;
@@ -667,6 +668,8 @@
         ensureQuestionListUI();
         if (!questionListBody) return;
 
+        const oldScrollTop = questionListBody.scrollTop;
+
         questionListBody.innerHTML = '';
         questionCounter = 0;
 
@@ -717,6 +720,9 @@
             empty.textContent = '还没有问题哦~';
             questionListBody.appendChild(empty);
         }
+
+        // 尽量保持原来的滚动位置
+        questionListBody.scrollTop = oldScrollTop;
     }
 
     function scheduleRebuildQuestions() {
@@ -909,8 +915,24 @@
             if (event.target.closest('button, a')) return;
             if (window.getSelection().toString().length > 0) return;
 
-            header.classList.toggle('ucc-header-expanded');
-            content.style.display = content.style.display === 'none' ? '' : 'none';
+            const wasCollapsed = content.style.display === 'none';
+
+            if (wasCollapsed) {
+                // 展开
+                content.style.display = '';
+                header.classList.add('ucc-header-expanded');
+            } else {
+                // 折叠
+                content.style.display = 'none';
+                header.classList.remove('ucc-header-expanded');
+            }
+
+            // 记录用户偏好（只对 ChatGPT 的 <pre> 有意义）
+            const pre = header.closest('pre');
+            if (pre) {
+                const expandedAfter = content.style.display !== 'none';
+                pre.dataset.uccUserPref = expandedAfter ? 'open' : 'closed';
+            }
         });
     }
 
@@ -944,26 +966,48 @@
         applyDisplayCollapse(header, content, shouldCollapse);
     }
 
+    // ★★★ ChatGPT 代码块处理（流式兼容 + 尊重用户点击）★★★
     function processChatGPTCodeBlock(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return;
+
+        // 新版 UI：header 是语言栏，content 是 .overflow-y-auto.p-4
         const header  = element.querySelector('.rounded-t-2xl');
-        const content = element.querySelector('.p-4');
+        const content = element.querySelector('.overflow-y-auto.p-4, .p-4');
         if (!header || !content) return;
 
         const codeText  = content.textContent || '';
         const lineCount = codeText.split(/\r\n|\r|\n/).length;
-
         if (lineCount <= 1) return;
 
-        if (element.hasAttribute(processAttribute)) {
-            // 已处理过就不重复套事件，但保留以后扩展空间
-            return;
+        const shouldCollapse   = lineCount > MIN_CODE_LINES;
+        const alreadyProcessed = element.hasAttribute(processAttribute);
+        const userPref         = element.dataset.uccUserPref; // 用户手动选择（open / closed）
+
+        if (!alreadyProcessed) {
+            element.setAttribute(processAttribute, 'true');
+            header.classList.add('chatgpt-header-padding', 'chatgpt-arrow-pos');
+            applyDisplayCollapse(header, content, shouldCollapse);
+        } else {
+            // 如果用户手动指定了展开 / 折叠，就优先尊重用户
+            if (userPref === 'open') {
+                content.style.display = '';
+                header.classList.add('ucc-header-expanded');
+                return;
+            } else if (userPref === 'closed') {
+                content.style.display = 'none';
+                header.classList.remove('ucc-header-expanded');
+                return;
+            }
+
+            // 否则按行数阈值自动处理
+            if (shouldCollapse) {
+                content.style.display = 'none';
+                header.classList.remove('ucc-header-expanded');
+            } else {
+                content.style.display = '';
+                header.classList.add('ucc-header-expanded');
+            }
         }
-        element.setAttribute(processAttribute, 'true');
-
-        header.classList.add('chatgpt-header-padding', 'chatgpt-arrow-pos');
-
-        const shouldCollapse = lineCount > MIN_CODE_LINES;
-        applyDisplayCollapse(header, content, shouldCollapse);
     }
 
     function processChatGPTUserMessage(element) {
@@ -990,17 +1034,53 @@
         scheduleRebuildQuestions();
     }
 
-    // ===== 针对 <pre> 的延时调度（流式输出结束后折叠） =====
+    // ===== 针对 <pre> 的延时调度（流式输出 + 结束兜底） =====
     function scheduleProcessPre(pre) {
         if (!pre || pre.nodeType !== Node.ELEMENT_NODE) return;
-        if (pre.hasAttribute(processAttribute)) return;
 
+        // 取 / 初始化当前 <pre> 的流式状态
+        let state = preStreamState.get(pre);
+        if (!state) {
+            state = {
+                lastCheck: 0,        // 上次“流式提前检查”的时间戳
+                collapsedOnce: false // 是否已经在流式过程中折叠过一次
+            };
+            preStreamState.set(pre, state);
+        }
+
+        const now = (window.performance && performance.now)
+            ? performance.now()
+            : Date.now();
+
+        // 1）流式中：限频检查，超过阈值就提前折叠一次
+        if (!state.collapsedOnce && now - state.lastCheck > 300) {
+            state.lastCheck = now;
+
+            const content = pre.querySelector('.overflow-y-auto.p-4, .p-4');
+            if (content) {
+                const text = content.textContent || '';
+                const lineCount = text.split(/\r\n|\r|\n/).length;
+
+                if (lineCount > MIN_CODE_LINES) {
+                    // 已经达到阈值：提前折叠一次，并标记
+                    const existing = pendingPreTimers.get(pre);
+                    if (existing) clearTimeout(existing);
+                    pendingPreTimers.delete(pre);
+
+                    processChatGPTCodeBlock(pre);
+                    state.collapsedOnce = true;
+                }
+            }
+        }
+
+        // 2）无论是否提前折叠，都保留“结束兜底”的 800ms 定时器
         const existing = pendingPreTimers.get(pre);
         if (existing) clearTimeout(existing);
 
         const id = setTimeout(() => {
             pendingPreTimers.delete(pre);
-            processChatGPTCodeBlock(pre);
+            preStreamState.delete(pre); // 本轮结束，状态清理，下次重新统计
+            processChatGPTCodeBlock(pre);  // 最终状态再算一遍行数，决定是否折叠
         }, 800);
 
         pendingPreTimers.set(pre, id);
@@ -1017,7 +1097,7 @@
             },
             'chatgpt.com': {
                 [`div[data-message-author-role="user"]:not([${processAttribute}])`]: processChatGPTUserMessage,
-                [`pre:not([${processAttribute}])`]: (el) => scheduleProcessPre(el) // 新增：全局处理 ChatGPT 代码块
+                [`pre`]: (el) => scheduleProcessPre(el) // 统一交给防抖调度
             }
         };
 
@@ -1044,11 +1124,13 @@
                         if (node.nodeType === Node.ELEMENT_NODE) {
                             scanAndProcess(node);
 
-                            // 代码块延时折叠
-                            const pre = node.matches('pre') ? node : (node.querySelector && node.querySelector('pre'));
+                            // 新增节点里如果包含 <pre>，触发一次调度
+                            const pre = node.matches('pre')
+                                ? node
+                                : (node.querySelector && node.querySelector('pre'));
                             if (pre) scheduleProcessPre(pre);
 
-                            // 若新增中包含用户消息，则之后统一重建问题列表
+                            // 新增用户消息 => 重建问题列表
                             if (
                                 node.matches &&
                                 node.matches('div[data-message-author-role="user"]')
@@ -1064,8 +1146,13 @@
                     });
                 }
 
-                // 目标本身若在用户消息里（编辑），也应重建
+                // 即便只是往已有元素里追加子节点（流式），也要看它是否在 <pre> 里
                 if (mutation.target && mutation.target.nodeType === Node.ELEMENT_NODE) {
+                    const preParent = mutation.target.closest && mutation.target.closest('pre');
+                    if (preParent) {
+                        scheduleProcessPre(preParent);
+                    }
+
                     const inUser = mutation.target.closest &&
                                    mutation.target.closest('div[data-message-author-role="user"]');
                     if (inUser) {
@@ -1077,14 +1164,22 @@
             if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                 const target = mutation.target;
                 if (target && target.nodeType === Node.ELEMENT_NODE) {
-                    const pre = target.closest('pre');
-                    if (pre) scheduleProcessPre(pre);
+                    // 忽略我们自己加的高亮类，避免点击问题项时重建导致问题框回到顶部
+                    const isHighlight = target.classList &&
+                        target.classList.contains('ucc-question-highlight');
+                    if (!isHighlight) {
+                        const preParent = target.closest && target.closest('pre');
+                        if (preParent) {
+                            scheduleProcessPre(preParent);
+                        }
 
-                    const inUser = target.closest &&
-                                   target.closest('div[data-message-author-role="user"]');
-                    if (inUser) {
-                        needRebuild = true;
+                        const inUser = target.closest &&
+                                       target.closest('div[data-message-author-role="user"]');
+                        if (inUser) {
+                            needRebuild = true;
+                        }
                     }
+
                     scanAndProcess(target);
                 }
             }
