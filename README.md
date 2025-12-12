@@ -1,6 +1,6 @@
 # LLM-Chat-Collapser-Sidebar
 
-> Last Updated: 2025-12-11
+> Last Updated: 2025-12-12
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://raw.githubusercontent.com/CaOUMay/LLM-Chat-Collapser-Sidebar/refs/heads/main/LICENSE)
 
